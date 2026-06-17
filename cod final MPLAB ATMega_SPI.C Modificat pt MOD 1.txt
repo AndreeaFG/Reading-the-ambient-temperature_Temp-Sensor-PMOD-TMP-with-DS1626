@@ -1,0 +1,86 @@
+/* ************************************************************************** */
+/** Descriptive File Name
+
+  @Company
+    UTCN
+
+  @File Name
+   ATMega_Uart.c
+
+  @Description
+    UART utilities for ATMega328p
+ */
+/* ************************************************************************** */
+
+/* ************************************************************************** */
+/* ************************************************************************** */
+/* Section: Included Files                                                    */
+/* ************************************************************************** */
+
+#include "ATMega_Uart.h"
+#include "Uno_Nano_utils.h"
+#include "ATMega_SPI.h"
+/* ************************************************************************** */
+
+/* ------------------------------------------------------------ */
+/***    SPIStetup()
+**
+**	Synopsis:
+**		SPISetup)()
+**
+**	Parameters:
+**		none
+**
+**	Return Values:
+**      none
+**
+**	Errors:
+**		none
+**
+**	Description:
+**	Configures the ATMega328p UART for 9600 baudrate, 8 data bits, no parity, 1 stop bit
+**  i.e. 9600-8-N-1
+**
+*/
+void SPISetup(){
+       
+    BitSet(PORT_SPI_DIR, SCK_DIR);//SCK-iesire
+    BitSet(PORT_SPI_DIR, MOSI_DIR);//MOSI-iesire
+    BitSet(PORT_SS_DIR, SS_DIR);//SS- iesire
+
+    BitSet(SPSR, SPI2X);
+    BitSet(SPCR, SPR0);//SCK frequency = F_CPU/8 = 1MHz
+   
+    //Mode = 0
+    //BitClear(SPCR, CPOL);
+    //BitClear(SPCR, CPHA); 
+    
+    //Mode = 1 (CPOL = 0, CPHA = 1)
+    BitClear(SPCR, CPOL);  
+    BitSet(SPCR, CPHA);    
+
+    //BitSet(SPCR, DORD);
+    BitClear(SPCR, DORD);
+
+    
+    BitSet(SPCR, MSTR);//Master Mode
+    BitSet(SPCR, SPE);//Enable SPI
+}
+
+
+
+void SPITransfer(uint8_t * pSend, uint8_t * pRecv, uint8_t ByteCount){
+   uint8_t i;
+   
+   for (i = 0; i < ByteCount; i++){
+    SPDR = *pSend++;
+    while (bit_is_clear(SPSR, SPIF));
+    *pRecv++ = SPDR;
+   }
+}
+
+
+
+/* *****************************************************************************
+ End of File
+ */

@@ -1,0 +1,131 @@
+#define SIM_MPIDE
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include "Uno_Nano_utils.h"
+#include "ATMega_Uart.h"
+#include "ATMega_SPI.h"
+
+#ifdef SIM_MPIDE
+#define F_CPU 16000000UL //frecventa ceasului principal 16 MHz
+#define TIMER1_FREQUENCY_HZ 1000
+#define STABLE_TIME_TICKS 3
+#endif
+
+//variabile pt controlul temporizarii si starii butonului
+volatile unsigned short TimebaseCount = 0; 
+volatile uint8_t Timebase_Tick = 0;
+
+enum BtnStates { Released, Pressed };
+volatile enum BtnStates BtnState = Released;
+volatile unsigned short BTNTimeCount = 0;
+
+FILE uart_str = FDEV_SETUP_STREAM(uart_putchar, uart_getchar, _FDEV_SETUP_WRITE);
+
+void ConfigureandStartTimer1(uint16_t Frequency);
+
+int main(int argc, char** argv) {
+    uint8_t DataSend[2] = {0x00, 0x00}; //0x51 Start Convert, 0xAA Read Temperature
+    uint8_t DataRec[2] = {0x00, 0x00}; //LSB, MSB
+    uint16_t Temp_RAW = 0; // rezultat = concatenarea MSB si LSB
+
+    stdout = stdin = &uart_str;
+
+    ConfigureUart();
+    SPISetup();
+    ConfigureandStartTimer1(TIMER1_FREQUENCY_HZ);
+
+    BitSet(PCMSK2, PCINT21);  // Buton PD5
+    BitSet(PCICR, PCIE2);     // Activare întreruperi pin change
+
+    sei();
+
+    // asteapta o apasare de buton pt a continua
+    printf("\r\nConfiguring DS1626, press BTN to continue...");
+    while (BtnState != Pressed);
+    while (BtnState == Pressed);
+    printf("\r\nBTN Pressed");
+
+    // Pas 1: Trimitere comanda Start Convert (0x51)
+    BitSet(PORT_SS, SS_PIN);              // Activam RST (SS) pe 1
+    DataSend[0] = 0x51; // se trimite comanda Start Convert
+    SPITransfer(DataSend, DataRec, 1);
+    BitClear(PORT_SS, SS_PIN);            // Dezactivam RST
+
+    while (1) {
+        if (BtnState == Pressed || Timebase_Tick) {
+            printf("\r\nReading temperature...");
+            // la fiecare apasare a butonului se initializeaza citirea temperarurii
+            
+            // Pas 2: Trimitem comanda Read Temperature (0xAA)
+            BitSet(PORT_SS, SS_PIN);          // Activam RST
+
+            DataSend[0] = 0xAA;
+            SPITransfer(DataSend, DataRec, 1);
+
+            // Pas 3: Setam MOSI (PB3) ca INTRARE pentru receptie (bidirectional)
+            BitClear(DDRB, PB3);  // PB3 = MOSI -> input
+            //DQ bidirectional, se permite senzorului sa trimita date
+            
+            // Pas 4: Citim 2 octeti (trimitand 0x00 de fiecare data)
+            DataSend[0] = 0x00;
+            DataSend[1] = 0x00;
+            SPITransfer(DataSend, DataRec, 2);
+            // se trmit 2 octeti goi in timp ce se citesc cei 2 oct care cont temp(LSB, MSB)
+            
+            BitClear(PORT_SS, SS_PIN);        // Dezactivam RST
+
+            // Pas 5: Setam din nou MOSI ca OUTPUT
+            BitSet(DDRB, PB3);  // PB3 = MOSI -> output
+
+            // Interpretare rezultat(afisarea temperaturii)
+            Temp_RAW = (DataRec[1] << 8) | DataRec[0];
+            printf("\r\nTEMP_RAW = 0x%04X", Temp_RAW);
+            //se combina cei 2 octeti intr-o val pe 16 biti si se afis in Tera Term
+            
+            // Convertim în Celsius: 
+            // float Temp_Celsius = Temp_RAW / 256.0;
+            // printf("\r\nTemperature: %.2f °C", Temp_Celsius);
+
+            if (Timebase_Tick) Timebase_Tick = 0;
+            else while (BtnState == Pressed);  // A?tept?m eliberarea BTN
+        }
+    }
+
+    return 0;
+}
+
+//genereaza un eveniment la fiecare 1 s
+ISR(TIMER1_COMPA_vect) {
+    BTNTimeCount++;
+    TimebaseCount++;
+    if (TimebaseCount == 1000) {
+        TimebaseCount = 0;
+        Timebase_Tick = 1;
+    }
+}
+
+//Debounce pt butonul de pe pinul PD5
+//nu reactioneaza imediat la o schimbare pe pinul butonului, 
+//asteapta 3ms pt ca semnalul sa fie stabilizat
+
+ISR(PCINT2_vect) {
+    if (BTNTimeCount >= STABLE_TIME_TICKS) {
+        if (bit_is_set(PIND, PIND5)) BtnState = Pressed;
+        else BtnState = Released;
+    }
+    BTNTimeCount = 0;
+}
+
+//config Timer1 in mod CTC pt a genera o intrerupere la fiecare 1ms
+void ConfigureandStartTimer1(uint16_t Frequency) {
+    TCCR1A = 0;
+    TCCR1B = 0;
+    TCNT1 = 0;
+    OCR1A = 16000 - 1;
+    BitSet(TCCR1B, WGM12);    // CTC mode (Clear Timer on Compare)
+    BitSet(TIMSK1, OCIE1A);   // Compare interrupt
+    BitSet(TCCR1B, CS10);     // Prescaler = 1
+}
